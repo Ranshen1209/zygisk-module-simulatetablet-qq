@@ -108,13 +108,13 @@ ifeq ($(NEAR_BRANCH),true)
     endif
 endif
 
-LOCAL_C_INCLUDES += $(LOCAL_PATH)/Dobby/builtin-plugin/SymbolResolver
-LOCAL_SRC_FILES += \
-    Dobby/builtin-plugin/SymbolResolver/elf/dobby_symbol_resolver.cc
+ifeq ($(PLUGIN_SYMBOL_RESOLVER),true)
+    LOCAL_C_INCLUDES += $(LOCAL_PATH)/Dobby/builtin-plugin/SymbolResolver
+    LOCAL_SRC_FILES += \
+        Dobby/builtin-plugin/SymbolResolver/elf/dobby_symbol_resolver.cc
+endif
 
-LOCAL_LDLIBS := -llog -ldl
-
-include $(BUILD_SHARED_LIBRARY)
+include $(BUILD_STATIC_LIBRARY)
 
 include $(CLEAR_VARS)
 
@@ -126,8 +126,8 @@ LOCAL_SRC_FILES := main.cpp
 LOCAL_C_INCLUDES := \
     $(LOCAL_PATH)/Dobby/include \
 
-LOCAL_SHARED_LIBRARIES := dobby
+LOCAL_STATIC_LIBRARIES := dobby
 
-LOCAL_LDLIBS := -llog -lstdc++
+LOCAL_LDLIBS := -llog -ldl -lstdc++
 
 include $(BUILD_SHARED_LIBRARY)
