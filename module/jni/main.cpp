@@ -16,6 +16,8 @@
 #define QQ_TARGET_BRAND "Xiaomi"
 #define QQ_TARGET_MODEL "23046RP50C"
 #define QQ_TARGET_MANUFACTURER "Xiaomi"
+#define QQ_TARGET_DEVICE "tablet_device"
+#define QQ_TARGET_PRODUCT "tablet_product"
 
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
@@ -23,7 +25,10 @@ using zygisk::ServerSpecializeArgs;
 using zygisk::Option;
 
 static char* extractPackageNameFromDataDir(const char* dataDir) {
-    if (!dataDir) return nullptr;
+    if (!dataDir) {
+        LOGW("extractPackageNameFromDataDir: dataDir is null");
+        return nullptr;
+    }
 
     const char* lastSlash = strrchr(dataDir, '/');
     if (!lastSlash) {
@@ -61,7 +66,7 @@ int my_system_property_get(const char *name, char *value) {
     if (orig_system_property_get) {
         return orig_system_property_get(name, value);
     } else {
-        LOGE("Hooked __system_property_get: Original function is null");
+        LOGE("Hooked __system_property_get: Original function is null (called for %s)", name ? name : "null");
         value[0] = '\0';
         return 0;
     }
@@ -73,8 +78,10 @@ private:
     JNIEnv *env = nullptr;
     bool isTargetApp = false;
 
-    void simulateTabletDevice(const char *brand, const char *model, const char *manufacturer) {
-        LOGI("Simulating device: Brand=%s, Model=%s, Manufacturer=%s", brand, model, manufacturer);
+    void simulateTabletDevice(const char *brand, const char *model, const char *manufacturer,
+                              const char *device, const char *product) {
+        LOGI("Simulating device: Brand=%s, Model=%s, Manufacturer=%s, Device=%s, Product=%s",
+             brand, model, manufacturer, device, product);
 
         jclass buildClass = env->FindClass("android/os/Build");
         if (!buildClass) {
@@ -86,8 +93,10 @@ private:
         jfieldID manuField = env->GetStaticFieldID(buildClass, "MANUFACTURER", "Ljava/lang/String;");
         jfieldID brandField = env->GetStaticFieldID(buildClass, "BRAND", "Ljava/lang/String;");
         jfieldID modelField = env->GetStaticFieldID(buildClass, "MODEL", "Ljava/lang/String;");
+        jfieldID deviceField = env->GetStaticFieldID(buildClass, "DEVICE", "Ljava/lang/String;");
+        jfieldID productField = env->GetStaticFieldID(buildClass, "PRODUCT", "Ljava/lang/String;");
 
-        if (!manuField || !brandField || !modelField) {
+        if (!manuField || !brandField || !modelField || !deviceField || !productField) {
             LOGE("simulateTabletDevice: Failed to get Build class fields");
             env->DeleteLocalRef(buildClass);
             if (env->ExceptionCheck()) env->ExceptionClear();
@@ -97,20 +106,28 @@ private:
         jstring manuJ = env->NewStringUTF(manufacturer);
         jstring brandJ = env->NewStringUTF(brand);
         jstring modelJ = env->NewStringUTF(model);
+        jstring deviceJ = env->NewStringUTF(device);
+        jstring productJ = env->NewStringUTF(product);
 
-        if (!manuJ || !brandJ || !modelJ) {
+        if (!manuJ || !brandJ || !modelJ || !deviceJ || !productJ) {
             LOGE("simulateTabletDevice: Failed to create JNI strings");
             if (manuJ) env->DeleteLocalRef(manuJ);
             if (brandJ) env->DeleteLocalRef(brandJ);
             if (modelJ) env->DeleteLocalRef(modelJ);
+            if (deviceJ) env->DeleteLocalRef(deviceJ);
+            if (productJ) env->DeleteLocalRef(productJ);
         } else {
             env->SetStaticObjectField(buildClass, manuField, manuJ);
             env->SetStaticObjectField(buildClass, brandField, brandJ);
             env->SetStaticObjectField(buildClass, modelField, modelJ);
+            env->SetStaticObjectField(buildClass, deviceField, deviceJ);
+            env->SetStaticObjectField(buildClass, productField, productJ);
             LOGI("simulateTabletDevice: Build fields set successfully");
             env->DeleteLocalRef(manuJ);
             env->DeleteLocalRef(brandJ);
             env->DeleteLocalRef(modelJ);
+            env->DeleteLocalRef(deviceJ);
+            env->DeleteLocalRef(productJ);
         }
 
         env->DeleteLocalRef(buildClass);
@@ -121,7 +138,7 @@ private:
     }
 
     void installSystemPropertyHook() {
-        LOGI("Installing hook for __system_property_get");
+        LOGI("Installing hook for __system_property_get in PID %d", getpid());
 
         void *target_addr = dlsym(RTLD_DEFAULT, "__system_property_get");
         if (target_addr) {
@@ -139,6 +156,7 @@ private:
             }
         } else {
             LOGE("Failed to find __system_property_get using dlsym");
+            orig_system_property_get = nullptr;
         }
     }
 
@@ -163,8 +181,7 @@ public:
                 packageName = extractPackageNameFromDataDir(appDataDirC);
                 if (packageName) {
                     if (strcmp(packageName, QQ_PACKAGE_NAME) == 0) {
-                        LOGI("Pre-specialize: Matched QQ (%s) from app_data_dir", packageName);
-                        api->setOption(zygisk::FORCE_DENYLIST_UNMOUNT);
+                        LOGI("Pre-specialize: Matched target app (%s) from app_data_dir", packageName);
                         this->isTargetApp = true;
                     }
                     free(packageName);
@@ -180,25 +197,28 @@ public:
             const char *niceNameC = env->GetStringUTFChars(args->nice_name, nullptr);
             if (niceNameC) {
                 if (strstr(niceNameC, QQ_PACKAGE_NAME) != nullptr) {
-                    LOGI("Pre-specialize: Matched QQ (%s) from nice_name", niceNameC);
-                    api->setOption(zygisk::FORCE_DENYLIST_UNMOUNT);
+                    LOGI("Pre-specialize: Matched target app (%s) from nice_name", niceNameC);
                     this->isTargetApp = true;
                 }
                 env->ReleaseStringUTFChars(args->nice_name, niceNameC);
             }
         }
 
-        if (!this->isTargetApp) {
+        if (this->isTargetApp) {
+            api->setOption(zygisk::FORCE_DENYLIST_UNMOUNT);
+            LOGI("Pre-specialize: Enabling FORCE_DENYLIST_UNMOUNT for target app");
+        } else {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
         }
     }
 
     void postAppSpecialize(const AppSpecializeArgs *args) override {
         if (this->isTargetApp) {
-            LOGI("Post-specialize: Processing QQ, PID: %d", getpid());
-            simulateTabletDevice(QQ_TARGET_BRAND, QQ_TARGET_MODEL, QQ_TARGET_MANUFACTURER);
+            LOGI("Post-specialize: Processing target app, PID: %d", getpid());
             installSystemPropertyHook();
-            LOGI("Post-specialize: QQ processing completed");
+            simulateTabletDevice(QQ_TARGET_BRAND, QQ_TARGET_MODEL, QQ_TARGET_MANUFACTURER,
+                                 QQ_TARGET_DEVICE, QQ_TARGET_PRODUCT);
+            LOGI("Post-specialize: Target app processing completed");
         }
     }
 };
